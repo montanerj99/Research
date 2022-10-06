@@ -7,14 +7,15 @@
 
 using namespace std;
 
-//Global constants
-const int D {5};
-const int spin_deg {2};
-const int mps_size {3};
+//Global variables
+const int D = {5};
+const int Dw = {5};
+const int spin_deg = {2};
+const int mps_size = {3};
 
 //necessary structures
 struct index_t{
-  int dims[3];
+  int dims[4];
 };
 
 struct Tensor_t{
@@ -22,17 +23,42 @@ struct Tensor_t{
   struct index_t index;
 };
 
+//tensor of product before compression
+struct pTensor_t{
+  double data[D*Dw][D*Dw][spin_deg];
+  struct index_t index;
+};
+
+//Tensor in an MPO
+struct oTensor_t{
+  double data[Dw][Dw][spin_deg][spin_deg];
+  struct index_t index;
+};
+
 struct MPS_t{
   struct Tensor_t *sites;
 };
 
+//mps resulting from product before compression
+struct pMPS_t{
+  struct pTensor_t *sites;
+};
+
+struct MPO_t{
+  struct oTensor_t *sites;
+};
+
 //function declarations
 Tensor_t makeTensor(index_t theIndex);
+MPO_t makeMPO();
 Tensor_t matr_mult(Tensor_t t1, Tensor_t t2, int *config);
 double evaluate(int *config, MPS_t mps);
 MPS_t adjoint(MPS_t mps);
 double overlap(MPS_t mps1, MPS_t mps2);
 Tensor_t triple_matr_product(Tensor_t t1, Tensor_t t2, Tensor_t t3);
+MPS_t apply_one_site_H(int H[spin_deg][spin_deg], int i, MPS_t mps);
+pMPS_t apply_MPO(MPO_t o, MPS_t m);
+int base_n_counter(int *count);
 
 int main(){
 
@@ -73,6 +99,18 @@ int main(){
 
   double ovlp = overlap(mps1, mps2);
   printf("Overlap: %f\n", ovlp);
+
+  MPO_t o = makeMPO();
+  printf("MPO Generated\n");
+
+  pMPS_t m = apply_MPO(o, mps1);
+
+  if( m.sites[0].index.dims[0] == -1){
+    printf("MPO-MPS Application Failed\n");
+  }
+  else{
+    printf("MPO-MPS Application Successful\n");
+  }
 }
 
 
@@ -82,7 +120,7 @@ Tensor_t makeTensor( index_t theIndex){
   struct Tensor_t t;
   t.index =  theIndex;
 
-  //fill tensor with random values between 0-1
+  //fill tensors
   for(int i=0; i<theIndex.dims[0]; i++){
     for(int j=0; j<theIndex.dims[1]; j++){
       for(int k=0; k<theIndex.dims[2];k++){
@@ -94,6 +132,33 @@ Tensor_t makeTensor( index_t theIndex){
   return t;
 }
 
+MPO_t makeMPO(){
+
+  struct MPO_t m;
+  m.sites = new oTensor_t[mps_size];
+
+  //loop through sites of the MPO
+  for(int i=0; i<mps_size; i++){
+
+    //assign tensor dimensions
+    m.sites[i].index.dims[0] = Dw;
+    m.sites[i].index.dims[1] = Dw;
+    m.sites[i].index.dims[2] = spin_deg;
+    m.sites[i].index.dims[3] = spin_deg;
+
+    //fill tensor
+    for(int j=0; j<m.sites[i].index.dims[0]; j++){
+      for(int k=0; k<m.sites[i].index.dims[1]; k++){
+        for(int l=0; l<m.sites[i].index.dims[2];l++){
+          for(int n=0; n<m.sites[i].index.dims[3];n++){
+            m.sites[i].data[j][k][l][n] = 1;
+          }
+        }
+      }
+    }
+  }
+  return m;
+}
 
 
 
@@ -102,8 +167,9 @@ Tensor_t makeTensor( index_t theIndex){
 */
 Tensor_t matr_mult(Tensor_t t1, Tensor_t t2, int *config){
 
-  struct Tensor_t t;
   int sum;
+
+  struct Tensor_t t;
   t.index.dims[0] = t1.index.dims[0];
   t.index.dims[1] = t2.index.dims[1];
   t.index.dims[2] = 1;
@@ -286,5 +352,121 @@ Tensor_t triple_matr_product(Tensor_t t1, Tensor_t t2, Tensor_t t3){
   }
   return t;
 }
+/*
+  Apply H(spin_deg X spin_deg matrix) to site i(0 indexed) of the MPS
+*/
+MPS_t apply_one_site_H(int H[spin_deg][spin_deg], int i, MPS_t mps){
+
+  MPS_t ret;
+  ret.sites = new Tensor_t[mps_size];
+
+  //loop through all sites
+  for(int j=0; j<mps_size; j++){
+
+    //new mps has same dimensions as old one
+    ret.sites[j].index.dims[0] = mps.sites[j].index.dims[0];
+    ret.sites[j].index.dims[1] = mps.sites[j].index.dims[1];
+    ret.sites[j].index.dims[2] = mps.sites[j].index.dims[2];
+
+    //loop through bond matrix indices
+    for(int k=0; k<ret.sites[j].index.dims[0]; k++){
+      for(int l=0; l<ret.sites[j].index.dims[1]; l++){
+
+        //if not applying H to this site, just copy values
+        if(j != i){
+          for(int n=0; n<ret.sites[j].index.dims[2]; n++){
+            ret.sites[j].data[k][l][n] = mps.sites[j].data[k][l][n];
+          }
+        }
+
+        //otherwise apply the operator
+        else{
+          for(int m=0; m<spin_deg; m++){
+            for(int n=0; n<spin_deg; n++){
+              ret.sites[j].data[k][l][m] += H[m][n]*mps.sites[j].data[k][l][n];
+            }
+          }
+        }
+      }
+    }
+  }
+  return ret;
+}
 
 
+pMPS_t apply_MPO(MPO_t o, MPS_t m){
+
+  pMPS_t ret;
+  ret.sites = new pTensor_t[mps_size];
+
+  //loop through sites of MPS
+  for(int i=0; i<mps_size; i++){
+
+    ret.sites[i].index.dims[0] = o.sites[i].index.dims[0]*m.sites[i].index.dims[0];
+    ret.sites[i].index.dims[1] = o.sites[i].index.dims[1]*m.sites[i].index.dims[1];
+    ret.sites[i].index.dims[2] = spin_deg;
+
+    //indices of bond matrix j and k (base 10) can be represented as coupled indices of original matrix ind1 and ind1 
+    int ind1[2] = {0,0};
+    int ind2[2] = {0,0};
+
+    //loop through bond matrix of resulting MPS
+    for(int j=0; j<ret.sites[i].index.dims[0]; j++){
+
+      //reset k counter
+      ind2[0] = 0;
+      ind2[1] = 0;
+
+      for(int k=0; k<ret.sites[i].index.dims[1]; k++){
+
+        //loop through physical index of resulting MPS (sigma)
+        for(int l=0; l<spin_deg; l++){
+
+          //zero out value beforehard
+          ret.sites[i].data[j][k][l] = 0;
+
+          //loop over physical index being summed over (sigma')
+          for(int n=0; n<spin_deg; n++){
+            ret.sites[i].data[j][k][l] += o.sites[i].data[ind1[0]][ind2[0]][l][n]*m.sites[i].data[ind1[1]][ind2[1]][n];
+          }
+        }
+
+        //increment ind 2 counter, perform check it agrees with k
+        if( base_n_counter(ind2) != k){
+          ret.sites[0].index.dims[0] = -1;
+          return ret;
+        }
+      }
+
+      //increment ind1 counter, perform check it agrees with j
+      if( base_n_counter(ind1) != j){
+        ret.sites[0].index.dims[0] = -1;
+        return ret;
+      }
+    }
+  }
+  return ret;
+}
+
+/*
+  increment the counter of coupled index, index 0 has goes to Dw, index 1 goes to D
+  return current count in base 10, returns -1 when reached end of the count
+*/
+int base_n_counter(int *count){
+
+  int dec = count[0]*Dw + count[1];
+
+  //return -1 if reached the end of the counter
+  if(count[0] == Dw){
+    return -1;
+  }
+
+  //increment the counter
+  //higher order digit stored at index 1
+  count[1]++;
+  if(count[1] == D){
+    count[1] = 0;
+    count[0]++;
+  }
+  return dec;
+}
