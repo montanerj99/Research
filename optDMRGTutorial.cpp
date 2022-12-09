@@ -249,7 +249,7 @@ Tensor<double,4> apply_MPO(Tensor<double,4> mps, Tensor<double,5> mpo){
         for(int l=0; l<spin_deg; l++){
           for(int j=0; j<D; j++){
             for(int k=0; k<D; k++){
-              prod(i,m*D+j,n*D+k,l) = temp(j,k,l);
+              prod(i,m*D+j,n*D+k,l) = temp(j,k,l);     
             }
           }
         }
@@ -270,6 +270,11 @@ Tensor<double,4> apply_MPO(Tensor<double,4> mps, Tensor<double,5> mpo){
 Tensor<double,4> compress(Tensor<double,4> mps){
 
   Tensor<double,4> ret(mps_size,D,D,spin_deg);
+  Tensor<double,3> site(D,D,spin_deg);
+
+  for(int i=0; i<mps_size; i++){
+    
+  }
 
   return ret;
 }
